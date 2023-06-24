@@ -16,9 +16,9 @@ func TestSimple(t *testing.T) {
 	pass := make(chan error)
 	data := []byte("hello")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	//SetLogger(log.New(os.Stdout, "[Default] ", log.Lmicroseconds|log.Lshortfile))
+	SetLogger(log.New(os.Stdout, "[Listener] ", log.Lmicroseconds|log.Lshortfile))
 	il := Listen(ctx, p)
 
 	// Server
@@ -27,15 +27,12 @@ func TestSimple(t *testing.T) {
 		accept := make(chan net.Conn)
 		go func() {
 			for {
-				//t.Log("[T] Ready to accept")
 				c, err := l.Accept()
 				if err != nil {
-					//t.Logf("[T] Failed to accept: %s", err)
 					pass <- err
 					cancel(err)
 					break
 				}
-				//t.Log("[T] Pushing accepted connection")
 				accept <- c
 			}
 		}()
@@ -44,18 +41,11 @@ func TestSimple(t *testing.T) {
 			case <-ctx.Done():
 				break
 			case c, ok := <-accept:
-				if !ok {
-					continue
-				}
-				if c == nil {
+				if !ok || c == nil {
 					continue
 				}
 				t.Logf("Accepted connection from %v", c.RemoteAddr())
 				go func(c net.Conn) {
-					if c == nil {
-						pass <- fmt.Errorf("got nil net.Conn in goroutine")
-						return
-					}
 					b := make([]byte, len(data))
 					t.Logf("Reading...")
 					n, err := c.Read(b)
@@ -75,11 +65,10 @@ func TestSimple(t *testing.T) {
 	}(ctx, il)
 
 	// Client
-	time.Sleep(time.Second)
 	c, err := Dial(
 		ctx, p,
 		WithErrorLogger(log.New(os.Stdout, "[Client Error] ", log.Lmicroseconds|log.Lshortfile)),
-		//WithEventLogger(log.New(os.Stdout, "[Client Event] ", log.Lmicroseconds|log.Lshortfile)),
+		WithEventLogger(log.New(os.Stdout, "[Client Event] ", log.Lmicroseconds|log.Lshortfile)),
 	)
 	if err != nil {
 		t.Fatal(err)

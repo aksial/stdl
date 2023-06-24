@@ -6,9 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"sync"
-
-	"github.com/google/uuid"
 )
 
 var eventLogger = log.New(io.Discard, "", 0)
@@ -18,8 +15,7 @@ type listener struct {
 	cancel context.CancelFunc
 
 	incoming chan net.Conn
-	conns    map[uuid.UUID]net.Conn
-	lock     sync.Mutex
+	conn     *conn
 
 	pipe io.ReadWriter
 
@@ -30,7 +26,6 @@ func Listen(ctx context.Context, p io.ReadWriter) net.Listener {
 	l := new(listener)
 	l.ctx, l.cancel = context.WithCancel(ctx)
 	l.incoming = make(chan net.Conn)
-	l.conns = make(map[uuid.UUID]net.Conn)
 	l.pipe = p
 	l.eventLogger = eventLogger
 	go l.do()
@@ -55,7 +50,6 @@ func (l *listener) Accept() (net.Conn, error) {
 
 func (l *listener) do() {
 	defer l.Close()
-	fresh := make(chan net.Conn)
 	// Reader loop
 	go func() {
 		buf := make([]byte, 65536)
@@ -65,47 +59,20 @@ func (l *listener) do() {
 				l.eventLogger.Printf("failed to read: %s", err)
 				return
 			}
-			if n < idsz {
-				l.eventLogger.Println("read less than header length")
-				continue
-			}
 			l.eventLogger.Printf("read %db", n)
-			id, err := uuid.FromBytes(buf[:idsz])
-			if err != nil {
-				l.eventLogger.Println("cannot parse header for ID")
-				continue
-			}
-			l.lock.Lock()
-			c, ok := l.conns[id]
-			if !ok {
-				l.eventLogger.Println("unknown connection")
-				connCtx := context.WithValue(l.ctx, "id", id)
-				connCtx = context.WithValue(connCtx, "disconnect", func(dcctx context.Context) {
-					dcid, ok := dcctx.Value("id").(uuid.UUID)
-					if ok {
-						delete(l.conns, dcid)
-					}
+			if l.conn == nil {
+				connCtx := context.WithValue(l.ctx, "disconnect", func(_ context.Context) {
+					l.conn = nil
 				})
-				l.conns[id], err = newConn(connCtx, l.pipe)
+				l.conn, err = newConn(connCtx, l.pipe)
 				if err != nil {
 					l.eventLogger.Printf("failed to initialize connection: %s", err)
-					l.lock.Unlock()
+					l.conn = nil
 					continue
 				}
-				_, err = l.conns[id].Write(nil)
-				if err != nil {
-					l.eventLogger.Printf("failed to write handshake to connection: %v", err)
-					l.lock.Unlock()
-					continue
-				}
-				fresh <- l.conns[id]
-				l.lock.Unlock()
-				continue
+				l.incoming <- l.conn
 			}
-			// Write to established connection.
-			go func(conn net.Conn) {
-				conn.Write(buf[idsz:n])
-			}(c)
+			l.conn.Write(buf[:n])
 		}
 	}()
 	// Pass unestablished connections to the handling channel.
@@ -113,13 +80,6 @@ func (l *listener) do() {
 		select {
 		case <-l.ctx.Done():
 			return
-		case c, ok := <-fresh:
-			if !ok {
-				l.eventLogger.Println("Channel for fresh connections is closed")
-				return
-			}
-			l.eventLogger.Println("Pushing new connection to acceptor")
-			l.incoming <- c
 		}
 	}
 }
