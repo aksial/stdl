@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = "github.com/aksial/stdl/testdata/grpc/arithmetic/arithmetic";
+
+service Arithmetic {
+	rpc Add(Many) returns (One) {}
+	rpc Sub(Many) returns (One) {}
+	rpc Mul(Many) returns (One) {}
+	rpc Div(Many) returns (One) {}
+}
+
+message Many {
+	repeated double values = 1;
+}
+
+message One {
+	double value = 1;
+}
