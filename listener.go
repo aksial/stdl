@@ -14,8 +14,8 @@ type listener struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	incoming chan net.Conn
 	conn     *conn
+	incoming chan net.Conn
 
 	pipe io.ReadWriter
 
@@ -33,54 +33,36 @@ func Listen(ctx context.Context, p io.ReadWriter) net.Listener {
 }
 
 func (l *listener) Accept() (net.Conn, error) {
-	select {
-	case <-l.ctx.Done():
-		if err := context.Cause(l.ctx); err != nil {
-			return nil, err
-		}
-		return nil, ErrContextCanceled
-	case c, ok := <-l.incoming:
-		if !ok {
-			return nil, errors.New("channel is closed")
-		}
-		l.eventLogger.Println("Accepted connection")
-		return c, nil
+	c, ok := <-l.incoming
+	if !ok {
+		return nil, errors.New("closed")
 	}
+	return c, nil
 }
 
 func (l *listener) do() {
 	defer l.Close()
-	// Reader loop
-	go func() {
-		buf := make([]byte, 65536)
-		for {
-			n, err := l.pipe.Read(buf)
-			if err != nil {
-				l.eventLogger.Printf("failed to read: %s", err)
-				return
-			}
-			l.eventLogger.Printf("read %db", n)
-			if l.conn == nil {
-				connCtx := context.WithValue(l.ctx, "disconnect", func(_ context.Context) {
-					l.conn = nil
-				})
-				l.conn, err = newConn(connCtx, l.pipe)
-				if err != nil {
-					l.eventLogger.Printf("failed to initialize connection: %s", err)
-					l.conn = nil
-					continue
-				}
-				l.incoming <- l.conn
-			}
-			l.conn.Write(buf[:n])
-		}
-	}()
-	// Pass unestablished connections to the handling channel.
+	buf := make([]byte, 65536)
 	for {
-		select {
-		case <-l.ctx.Done():
+		n, err := l.pipe.Read(buf)
+		if err != nil {
+			l.eventLogger.Printf("failed to read: %s", err)
 			return
 		}
+		l.eventLogger.Printf("read %db", n)
+		if l.conn == nil {
+			connCtx := context.WithValue(l.ctx, "disconnect", func(_ context.Context) {
+				l.conn = nil
+			})
+			l.conn, err = newConn(connCtx, l.pipe)
+			if err != nil {
+				l.eventLogger.Printf("failed to initialize connection: %s", err)
+				l.conn = nil
+				continue
+			}
+			l.incoming <- l.conn
+		}
+		l.conn.Write(buf[:n])
 	}
 }
 

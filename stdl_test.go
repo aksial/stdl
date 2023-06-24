@@ -23,44 +23,31 @@ func TestSimple(t *testing.T) {
 
 	// Server
 	go func(ctx context.Context, l net.Listener) {
-		ctx, cancel := context.WithCancelCause(ctx)
-		accept := make(chan net.Conn)
-		go func() {
-			for {
-				c, err := l.Accept()
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				t.Logf("failed to accept: %s", err)
+				continue
+			}
+			if c == nil {
+				continue
+			}
+			t.Logf("Accepted connection from %v", c.RemoteAddr())
+			go func(c net.Conn) {
+				b := make([]byte, len(data))
+				t.Logf("Reading...")
+				n, err := c.Read(b)
 				if err != nil {
 					pass <- err
-					cancel(err)
-					break
+					return
 				}
-				accept <- c
-			}
-		}()
-		for {
-			select {
-			case <-ctx.Done():
-				break
-			case c, ok := <-accept:
-				if !ok || c == nil {
-					continue
+				t.Logf("Received %d bytes: %v", n, b[:n])
+				if bytes.Compare(b[:n], data) == 0 {
+					pass <- nil
+				} else {
+					pass <- fmt.Errorf("unexpected comparison result")
 				}
-				t.Logf("Accepted connection from %v", c.RemoteAddr())
-				go func(c net.Conn) {
-					b := make([]byte, len(data))
-					t.Logf("Reading...")
-					n, err := c.Read(b)
-					if err != nil {
-						pass <- err
-						return
-					}
-					t.Logf("Received %d bytes: %v", n, b[:n])
-					if bytes.Compare(b[:n], data) == 0 {
-						pass <- nil
-					} else {
-						pass <- fmt.Errorf("unexpected comparison result")
-					}
-				}(c)
-			}
+			}(c)
 		}
 	}(ctx, il)
 
